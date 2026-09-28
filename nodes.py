@@ -301,7 +301,7 @@ CONTEXT_PROMPT_OPTIMIZER_MODES = (
 )
 # Bump whenever the optimizer contract changes so an older auto-optimized
 # result cannot silently bypass the new continuity rules.
-PROMPT_OPTIMIZER_MARKER_VERSION = 9
+PROMPT_OPTIMIZER_MARKER_VERSION = 10
 PROMPT_OPTIMIZER_CONFIG_VERSION = 5
 PROMPT_OPTIMIZER_LANGUAGE_EN = "en"
 PROMPT_OPTIMIZER_LANGUAGE_ZH = "zh"
@@ -1359,6 +1359,8 @@ def _optimizer_single_segment_rules(
             "只优化用户消息中当前这一段。前面的原始段落仅用于理解人物、场景、道具和动作连续性，不能重写、总结或输出。"
             "最终只返回当前段的一条自然、完整、可独立执行的 MiniMax H3 提示词，不要输出编号、标题、解释、Markdown 围栏或分段标签。"
             "不要提到上一段、下一段、延续、拼接或提示词规划。保留当前段已有的媒体标签；只有当前段确实依赖已连接的媒体时才添加对应标签。\n"
+            "媒体引用只在当前段内生效，不能继承前段的引用。由已连接图片或视频素材定义的人物，只要在当前段出场，就必须在当前段明确写出对应的 @ 引用或 <Picture N>/<Video N> 标签，"
+            "即使前段已经引用过也必须重复。人物名字、<Subject N>、代词或外观描述不能代替素材引用。每段对同一素材明确引用一次即可，不必每句话重复；当前段未使用的素材不要强行加入。\n"
             f"当前是第 {int(segment_index) + 1} 段，共 {int(segment_count)} 段，时长约 {float(seconds):g} 秒。"
         )
     return (
@@ -1630,7 +1632,10 @@ def _optimizer_segment_rules(
             "如果使用时间码，每一段都必须从 0.00 秒起算，而不是沿用整条序列的累计时间。\n"
             "5. 音频连续性要灵活：持续的音乐或环境声可以保持同一身份，但允许根据剧情加入局部声音、停顿、静音或变化，不要机械重复没有新增信息的完整声音段落。\n"
             "6. 媒体引用由用户原始提示词和实际连接的媒体决定。保留显式的 @ 引用以及 <Picture N>、<Video N>、<Audio N> 标签，不要重编号、调换顺序或凭空创造标签。"
-            "如果一个媒体在某段负责人物、外观、场景、风格、动作、镜头、声音或连续性，就在该段明确引用；真正没有使用的媒体不要强行加入。媒体无法读取时，不要编造其内容。\n"
+            "媒体引用只在当前段内生效，不能继承前段的引用。由已连接图片或视频素材定义的人物，只要在某段出场，就必须在该段明确写出对应的 @ 引用或 <Picture N>/<Video N> 标签；"
+            "同一人物连续出场或再次出场时，每个出场分段都必须重复对应引用。人物名字、<Subject N>、代词或外观描述不能代替素材引用。"
+            "每段对同一素材明确引用一次即可，不必每句话重复。本节避免重复的要求只针对冗余描述，不适用于当前段必需的素材引用。"
+            "其他用于场景、风格、动作、镜头、声音或连续性的媒体，也必须在每个实际使用它的分段明确引用；真正没有使用的媒体不要强行加入。媒体无法读取时，不要编造其内容。\n"
             "7. 对白必须放在 <d>...</d> 中并保留原语言。"
         )
     if has_storyboard:
@@ -4776,8 +4781,8 @@ def _reference_conditioning(
         ref_blocks.append({"kind": "audio", "ref_audio_t": audio_t, "audio_latent": audio_latent})
         tag_by_input[item.input_index] = f"<Audio {audio_ordinal}>"
 
-    if not ref_items or all(item.get("type") == "audio" for item in ref_items):
-        raise ValueError("Reference mode needs at least one image or video")
+    if not ref_items:
+        raise ValueError("Reference mode needs at least one media resource")
 
     resolved_prompt = _resolve_reference_prompt(
         prompt,
@@ -4804,8 +4809,8 @@ def _validate_reference_media(items: list[_MediaInput], scope: str = "Reference 
         counts[item.media_type] += 1
     if counts["image"] > MAX_IMAGES or counts["video"] > MAX_VIDEOS or counts["audio"] > MAX_AUDIOS:
         raise ValueError(f"{scope} media limits are 9 images, 3 videos and 3 audio clips")
-    if counts["image"] == 0 and counts["video"] == 0:
-        raise ValueError(f"{scope} needs an image or video in addition to audio")
+    if not items:
+        raise ValueError(f"{scope} needs at least one media resource")
 
 
 def _extract_digital_human_audio(items: list[_MediaInput], scope: str) -> tuple[list[_MediaInput], Mapping[str, Any]]:
