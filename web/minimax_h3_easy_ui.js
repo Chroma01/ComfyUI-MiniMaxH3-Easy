@@ -8285,6 +8285,7 @@ function mediaLoaderResize(node) {
         // node to its content minimum; never shrink a user-resized node.
         const wasHidden = domWidget.hidden;
         const wasType = domWidget.type;
+        const wasOptionsHidden = domWidget.options ? domWidget.options.hidden : undefined;
         let fixedSize = null;
         try {
             domWidget.hidden = true;
@@ -8293,6 +8294,15 @@ function mediaLoaderResize(node) {
         } finally {
             domWidget.hidden = wasHidden;
             domWidget.type = wasType;
+            // The frontend syncs the legacy hidden contract (options.hidden /
+            // _state.options.hidden) from the temporary type="hidden" state
+            // while computeSize() runs. Restore it too:
+            // deriveWidgetVisibility() computes suppression from
+            // (hidden ?? options.hidden), so a leftover options.hidden=true
+            // keeps the DOM widget suppressed and the gallery collapses into
+            // a 0x0 box.
+            setWidgetOption(domWidget, "hidden", wasOptionsHidden);
+            delete domWidget.visibility;
         }
         if (Array.isArray(fixedSize) && typeof node.setSize === "function") {
             const width = Math.max(currentWidth, 320);
@@ -8312,6 +8322,39 @@ function mediaLoaderResize(node) {
     };
     if (typeof requestAnimationFrame === "function") requestAnimationFrame(measure);
     else setTimeout(measure, 0);
+    mediaLoaderSelfHealVisibility(node, panel, domWidget);
+}
+
+function mediaLoaderSelfHealVisibility(node, panel, domWidget) {
+    // Race guard: the frontend widget store can re-apply a visibility
+    // snapshot taken while the widget was temporarily hidden
+    // (type="hidden") during computeSize(), leaving the DOM widget host at
+    // display:none and the gallery collapsed to 0x0. Re-check the actual
+    // DOM state over the next few frames and clear any stale suppression.
+    let attempts = 0;
+    const heal = () => {
+        attempts += 1;
+        try {
+            if (!domWidget || !node?.graph) return;
+            const host = typeof panel?.closest === "function" ? panel.closest(".dom-widget") : null;
+            const suppressed = domWidget.hidden === true
+                || (domWidget.options && domWidget.options.hidden === true)
+                || (host && window.getComputedStyle(host).display === "none");
+            if (suppressed) {
+                domWidget.hidden = false;
+                setWidgetOption(domWidget, "hidden", false);
+                delete domWidget.visibility;
+                node.setDirtyCanvas?.(true, true);
+                app.graph?.setDirtyCanvas?.(true, true);
+            }
+        } catch { /* Self-heal must never break the layout pass. */ }
+        if (attempts < 3) {
+            if (typeof requestAnimationFrame === "function") requestAnimationFrame(heal);
+            else setTimeout(heal, 0);
+        }
+    };
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(heal);
+    else setTimeout(heal, 0);
 }
 
 function installMediaLoaderStyles() {
@@ -8442,6 +8485,10 @@ function installMediaLoaderNode(nodeType, nodeData) {
         }
         node.__h3MediaLoaderPanel = panel;
         const domWidget = node.addDOMWidget("h3_media_loader", "h3_media_loader", panel, {
+            // Keep the gallery visible while the canvas is zoomed out; the
+            // frontend defaults DOM widgets to hideOnZoom:true, which would
+            // collapse the gallery to a hidden 0x0 slot at low zoom.
+            hideOnZoom: false,
             getValue: () => String(getWidget(node, "media_state")?.value || ""),
             setValue: (value) => { const widget = getWidget(node, "media_state"); if (widget) widget.value = String(value || ""); mediaLoaderRender(node); },
             serialize: false,
@@ -8451,6 +8498,10 @@ function installMediaLoaderNode(nodeType, nodeData) {
         if (!domWidget) return;
         domWidget.serialize = false;
         setWidgetOption(domWidget, "serialize", false);
+        // The media loader must always be visible on the canvas; make sure it
+        // starts outside the frontend's legacy hidden state.
+        domWidget.hidden = false;
+        setWidgetOption(domWidget, "hidden", false);
         node.__h3MediaLoaderWidget = domWidget;
         mediaLoaderRender(node);
         mediaLoaderResize(node);
