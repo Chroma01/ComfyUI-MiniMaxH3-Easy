@@ -2342,21 +2342,6 @@ def _media_loader_widget_state(state: dict[str, list[dict[str, str]]]) -> dict[s
     return {f"{kind}s": entries for kind, entries in state.items()}
 
 
-def _media_preset_category(path: str) -> str:
-    """Video or Image bucket. Files saved before the category field derive it
-    from their own content: any video or audio makes the preset a video one."""
-    try:
-        with open(path, encoding="utf-8") as handle:
-            data = json.load(handle)
-        if isinstance(data, Mapping) and data.get("category") in ("video", "image"):
-            return data["category"]
-        if isinstance(data, Mapping) and (data.get("videos") or data.get("audios")):
-            return "video"
-    except Exception:
-        pass
-    return "image"
-
-
 def _register_media_presets_route() -> bool:
     try:
         from aiohttp import web
@@ -2377,8 +2362,7 @@ def _register_media_presets_route() -> bool:
                     full = os.path.join(directory, filename)
                     entries.append((os.path.getmtime(full), filename[:-5]))
         entries.sort(reverse=True)
-        presets = [{"name": name, "category": _media_preset_category(
-            os.path.join(directory, name + ".json"))} for _, name in entries]
+        presets = [name for _, name in entries]
         return web.json_response({"ok": True, "presets": presets})
 
     @routes.get("/minimax_h3_easy/media_presets/{name:.*}")
@@ -2392,7 +2376,6 @@ def _register_media_presets_route() -> bool:
             return web.json_response({
                 "ok": True,
                 "state": _media_loader_widget_state(state),
-                "category": _media_preset_category(path),
             })
         except Exception as exc:
             return web.json_response({"ok": False, "error": str(exc)}, status=500)
@@ -2418,12 +2401,8 @@ def _register_media_presets_route() -> bool:
             os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(path, "w", encoding="utf-8") as handle:
                 # Store in the widget's own plural JSON shape so preset files
-                # are hand-editable and identical to media_state content; the
-                # optional category key is a top-level extra the normalizer
-                # ignores on load.
+                # are hand-editable and identical to media_state content.
                 stored = _media_loader_widget_state(state)
-                if isinstance(payload, Mapping) and payload.get("category") in ("video", "image"):
-                    stored["category"] = payload["category"]
                 json.dump(stored, handle,
                           ensure_ascii=False, separators=(",", ":"))
             return web.json_response({
@@ -2435,8 +2414,8 @@ def _register_media_presets_route() -> bool:
 
     @routes.patch("/minimax_h3_easy/media_presets/{name:.*}")
     async def _media_presets_update(request):
-        """Rename and/or recategorize one preset. Renaming onto a live name
-        is a 409, never a silent overwrite — deleting stays an explicit act."""
+        """Rename one preset. Renaming onto a live name is a 409, never a
+        silent overwrite — deleting stays an explicit act."""
         path = _media_preset_path(request.match_info["name"])
         if path is None or not os.path.isfile(path):
             return web.json_response({"ok": False, "error": "preset not found"}, status=404)
@@ -2457,8 +2436,7 @@ def _register_media_presets_route() -> bool:
             with open(path, encoding="utf-8") as handle:
                 data = json.load(handle)
             data = dict(data) if isinstance(data, Mapping) else {}
-            if payload.get("category") in ("video", "image"):
-                data["category"] = payload["category"]
+            data.pop("category", None)  # old category files migrate on first rewrite
             os.makedirs(os.path.dirname(target), exist_ok=True)
             with open(target, "w", encoding="utf-8") as handle:
                 json.dump(data, handle, ensure_ascii=False, separators=(",", ":"))

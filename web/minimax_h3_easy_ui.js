@@ -203,9 +203,6 @@ const TEXT = {
     mediaLoaderPresetDelete: ZH_BROWSER ? "\u5220\u9664" : "Delete",
     mediaLoaderPresetMissing: ZH_BROWSER ? "\u6587\u4ef6\u7f3a\u5931" : "Files from the preset are missing",
     mediaLoaderPresetFailed: ZH_BROWSER ? "\u9884\u8bbe\u64cd\u4f5c\u5931\u8d25" : "Preset action failed",
-    mediaLoaderPresetCategory: ZH_BROWSER ? "\u5206\u7c7b" : "Category",
-    mediaLoaderPresetCategoryVideo: ZH_BROWSER ? "\u89c6\u9891" : "Video",
-    mediaLoaderPresetCategoryImage: ZH_BROWSER ? "\u56fe\u7247" : "Image",
     mediaLoaderPresetRename: ZH_BROWSER ? "\u91cd\u547d\u540d" : "Rename",
     outputTitle: ZH_BROWSER ? "MiniMax H3 Easy \u8f93\u51fa" : "MiniMax H3 Easy Output",
     samplerTitle: ZH_BROWSER ? "MiniMax H3 Easy \u91c7\u6837" : "MiniMax H3 Easy Sample",
@@ -8176,7 +8173,12 @@ async function mediaLoaderPresetFetch(path, options) {
 }
 
 function mediaLoaderPresetList() {
-    return mediaLoaderPresetFetch("").then((data) => data.presets || []).catch(() => []);
+    // Lenient: a pre-restart backend may still send [{name, category}] dicts.
+    return mediaLoaderPresetFetch("")
+        .then((data) => (data.presets || [])
+            .map((preset) => (typeof preset === "string" ? preset : preset?.name))
+            .filter(Boolean))
+        .catch(() => []);
 }
 
 async function mediaLoaderPresetMissingCount(state) {
@@ -8195,15 +8197,6 @@ function buildMediaLoaderPresetBar(node) {
     nameInput.type = "text";
     nameInput.placeholder = TEXT.mediaLoaderPresetName;
     nameInput.spellcheck = false;
-    const categorySelect = document.createElement("select");
-    categorySelect.title = TEXT.mediaLoaderPresetCategory;
-    [[TEXT.mediaLoaderPresetCategoryVideo, "video"], [TEXT.mediaLoaderPresetCategoryImage, "image"]]
-        .forEach(([label, value]) => {
-            const option = document.createElement("option");
-            option.value = value;
-            option.textContent = label;
-            categorySelect.append(option);
-        });
     const select = document.createElement("select");
     select.title = TEXT.mediaLoaderPresetLoad;
     const saveBtn = document.createElement("button");
@@ -8219,7 +8212,7 @@ function buildMediaLoaderPresetBar(node) {
     const deleteBtn = document.createElement("button");
     deleteBtn.type = "button";
     deleteBtn.textContent = TEXT.mediaLoaderPresetDelete;
-    row.append(nameInput, categorySelect, select, saveBtn, loadBtn, renameBtn, deleteBtn);
+    row.append(nameInput, select, saveBtn, loadBtn, renameBtn, deleteBtn);
 
     let armedTitle = null;
     let armTimer = 0;
@@ -8233,37 +8226,17 @@ function buildMediaLoaderPresetBar(node) {
         armTimer = window.setTimeout(disarm, 1500);
     };
 
-    const categories = new Map();
-    const syncCategory = () => {
-        const category = categories.get(select.value);
-        if (category) categorySelect.value = category;
-    };
-    select.addEventListener("change", syncCategory);
-
     async function refresh() {
         const presets = await mediaLoaderPresetList();
         const previous = select.value;
-        categories.clear();
-        presets.forEach((preset) => categories.set(preset.name, preset.category || "video"));
-        const groups = new Map();
-        presets.forEach((preset) => {
-            const category = categories.get(preset.name) || "video";
-            if (!groups.has(category)) {
-                const optgroup = document.createElement("optgroup");
-                optgroup.label = category === "image"
-                    ? TEXT.mediaLoaderPresetCategoryImage
-                    : TEXT.mediaLoaderPresetCategoryVideo;
-                groups.set(category, optgroup);
-            }
+        select.replaceChildren(...presets.map((name) => {
             const option = document.createElement("option");
-            option.value = preset.name;
-            option.textContent = preset.name;
-            groups.get(category).append(option);
-        });
-        select.replaceChildren(...["video", "image"].filter((category) => groups.has(category)).map((category) => groups.get(category)));
-        if (presets.some((preset) => preset.name === previous)) {
+            option.value = name;
+            option.textContent = name;
+            return option;
+        }));
+        if ([...select.options].some((option) => option.value === previous)) {
             select.value = previous;
-            syncCategory();
         }
     }
     refresh();
@@ -8277,7 +8250,7 @@ function buildMediaLoaderPresetBar(node) {
             return;
         }
         try {
-            if (armedTitle !== title && (await mediaLoaderPresetList()).some((preset) => preset.name === title)) {
+            if (armedTitle !== title && (await mediaLoaderPresetList()).some((name) => name === title)) {
                 // Second click arms the overwrite; label reverts after 3 s.
                 window.clearTimeout(armTimer);
                 armedTitle = title;
@@ -8289,7 +8262,7 @@ function buildMediaLoaderPresetBar(node) {
             await mediaLoaderPresetFetch("/" + encodeURIComponent(title), {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ state, category: categorySelect.value }),
+                body: JSON.stringify({ state }),
             });
             nameInput.value = title;
             flash(TEXT.mediaLoaderPresetSaved);
@@ -8343,12 +8316,11 @@ function buildMediaLoaderPresetBar(node) {
             await mediaLoaderPresetFetch("/" + encodeURIComponent(from), {
                 method: "PATCH",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ name: to, category: categorySelect.value }),
+                body: JSON.stringify({ name: to }),
             });
             await refresh();
             select.value = to;
             nameInput.value = "";
-            syncCategory();
         } catch (error) {
             alert(TEXT.mediaLoaderPresetFailed + ": " + error.message);
         }
