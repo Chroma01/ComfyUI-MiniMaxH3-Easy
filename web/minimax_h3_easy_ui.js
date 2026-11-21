@@ -201,6 +201,10 @@ const TEXT = {
     mediaLoaderPresetDelete: ZH_BROWSER ? "\u5220\u9664" : "Delete",
     mediaLoaderPresetMissing: ZH_BROWSER ? "\u6587\u4ef6\u7f3a\u5931" : "Files from the preset are missing",
     mediaLoaderPresetFailed: ZH_BROWSER ? "\u9884\u8bbe\u64cd\u4f5c\u5931\u8d25" : "Preset action failed",
+    mediaLoaderPresetCategory: ZH_BROWSER ? "\u5206\u7c7b" : "Category",
+    mediaLoaderPresetCategoryVideo: ZH_BROWSER ? "\u89c6\u9891" : "Video",
+    mediaLoaderPresetCategoryImage: ZH_BROWSER ? "\u56fe\u7247" : "Image",
+    mediaLoaderPresetRename: ZH_BROWSER ? "\u91cd\u547d\u540d" : "Rename",
     outputTitle: ZH_BROWSER ? "MiniMax H3 Easy \u8f93\u51fa" : "MiniMax H3 Easy Output",
     samplerTitle: ZH_BROWSER ? "MiniMax H3 Easy \u91c7\u6837" : "MiniMax H3 Easy Sample",
     selfLiftTitle: "MiniMax H3 Easy SelfLift",
@@ -8171,6 +8175,15 @@ function buildMediaLoaderPresetBar(node) {
     nameInput.type = "text";
     nameInput.placeholder = TEXT.mediaLoaderPresetName;
     nameInput.spellcheck = false;
+    const categorySelect = document.createElement("select");
+    categorySelect.title = TEXT.mediaLoaderPresetCategory;
+    [[TEXT.mediaLoaderPresetCategoryVideo, "video"], [TEXT.mediaLoaderPresetCategoryImage, "image"]]
+        .forEach(([label, value]) => {
+            const option = document.createElement("option");
+            option.value = value;
+            option.textContent = label;
+            categorySelect.append(option);
+        });
     const select = document.createElement("select");
     select.title = TEXT.mediaLoaderPresetLoad;
     const saveBtn = document.createElement("button");
@@ -8179,10 +8192,14 @@ function buildMediaLoaderPresetBar(node) {
     const loadBtn = document.createElement("button");
     loadBtn.type = "button";
     loadBtn.textContent = TEXT.mediaLoaderPresetLoad;
+    const renameBtn = document.createElement("button");
+    renameBtn.type = "button";
+    renameBtn.textContent = TEXT.mediaLoaderPresetRename;
+    renameBtn.title = TEXT.mediaLoaderPresetRename;
     const deleteBtn = document.createElement("button");
     deleteBtn.type = "button";
     deleteBtn.textContent = TEXT.mediaLoaderPresetDelete;
-    row.append(nameInput, select, saveBtn, loadBtn, deleteBtn);
+    row.append(nameInput, categorySelect, select, saveBtn, loadBtn, renameBtn, deleteBtn);
 
     let armedTitle = null;
     let armTimer = 0;
@@ -8196,16 +8213,38 @@ function buildMediaLoaderPresetBar(node) {
         armTimer = window.setTimeout(disarm, 1500);
     };
 
+    const categories = new Map();
+    const syncCategory = () => {
+        const category = categories.get(select.value);
+        if (category) categorySelect.value = category;
+    };
+    select.addEventListener("change", syncCategory);
+
     async function refresh() {
-        const names = await mediaLoaderPresetList();
+        const presets = await mediaLoaderPresetList();
         const previous = select.value;
-        select.replaceChildren(...names.map((name) => {
+        categories.clear();
+        presets.forEach((preset) => categories.set(preset.name, preset.category || "video"));
+        const groups = new Map();
+        presets.forEach((preset) => {
+            const category = categories.get(preset.name) || "video";
+            if (!groups.has(category)) {
+                const optgroup = document.createElement("optgroup");
+                optgroup.label = category === "image"
+                    ? TEXT.mediaLoaderPresetCategoryImage
+                    : TEXT.mediaLoaderPresetCategoryVideo;
+                groups.set(category, optgroup);
+            }
             const option = document.createElement("option");
-            option.value = name;
-            option.textContent = name;
-            return option;
-        }));
-        if (names.includes(previous)) select.value = previous;
+            option.value = preset.name;
+            option.textContent = preset.name;
+            groups.get(category).append(option);
+        });
+        select.replaceChildren(...["video", "image"].filter((category) => groups.has(category)).map((category) => groups.get(category)));
+        if (presets.some((preset) => preset.name === previous)) {
+            select.value = previous;
+            syncCategory();
+        }
     }
     refresh();
 
@@ -8218,7 +8257,7 @@ function buildMediaLoaderPresetBar(node) {
             return;
         }
         try {
-            if (armedTitle !== title && (await mediaLoaderPresetList()).includes(title)) {
+            if (armedTitle !== title && (await mediaLoaderPresetList()).some((preset) => preset.name === title)) {
                 // Second click arms the overwrite; label reverts after 3 s.
                 window.clearTimeout(armTimer);
                 armedTitle = title;
@@ -8230,7 +8269,7 @@ function buildMediaLoaderPresetBar(node) {
             await mediaLoaderPresetFetch("/" + encodeURIComponent(title), {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ state }),
+                body: JSON.stringify({ state, category: categorySelect.value }),
             });
             nameInput.value = title;
             flash(TEXT.mediaLoaderPresetSaved);
@@ -8265,6 +8304,33 @@ function buildMediaLoaderPresetBar(node) {
             }
         } catch (error) {
             globalThis.alert?.(TEXT.mediaLoaderPresetFailed + ": " + (error?.message || error));
+        }
+    });
+
+    renameBtn.addEventListener("click", async () => {
+        const from = select.value;
+        if (!from) return;
+        const to = String(nameInput.value || "").trim();
+        // First click (or empty box) moves the live name into the box so it
+        // can be edited; the next click with a changed name performs the move.
+        if (!to || to === from) {
+            nameInput.value = from;
+            nameInput.focus();
+            nameInput.select();
+            return;
+        }
+        try {
+            await mediaLoaderPresetFetch("/" + encodeURIComponent(from), {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ name: to, category: categorySelect.value }),
+            });
+            await refresh();
+            select.value = to;
+            nameInput.value = "";
+            syncCategory();
+        } catch (error) {
+            alert(TEXT.mediaLoaderPresetFailed + ": " + error.message);
         }
     });
 
@@ -8731,7 +8797,7 @@ function installMediaLoaderStyles() {
       .h3-media-loader-panel.is-file-drop-target { border-color:#718ca6; box-shadow:inset 0 0 0 1px rgba(113,140,166,.34); }
       .h3-media-loader-panel.is-file-drop-target::after { content:attr(data-drop-label); position:absolute; inset:8px; z-index:20; display:flex; align-items:center; justify-content:center; box-sizing:border-box; border:1px dashed rgba(146,177,207,.62); border-radius:5px; background:rgba(25,28,32,.9); color:#d7e2ec; font-size:12px; font-weight:600; letter-spacing:.01em; pointer-events:none; }
       .h3-media-loader-toolbar { display:flex; align-items:center; justify-content:space-between; gap:8px; min-height:28px; padding-bottom:1px; }
-      .h3-media-loader-presets { display:flex; align-items:center; gap:6px; min-height:24px; }
+      .h3-media-loader-presets { display:flex; align-items:center; flex-wrap:wrap; gap:6px; min-height:24px; }
       .h3-media-loader-presets input { flex:1.2 1 110px; min-width:0; padding:4px 6px; border:1px solid #111; border-radius:4px; background:#1a1a1a; color:var(--h3-native-widget-text,#ddd); font:12px sans-serif; }
       .h3-media-loader-presets select { flex:1 1 90px; min-width:0; padding:4px; border:1px solid #111; border-radius:4px; background:#1a1a1a; color:var(--h3-native-widget-text,#ddd); font:12px sans-serif; }
       .h3-media-loader-presets button { padding:4px 8px; border:1px solid #111; border-radius:4px; background:#333; color:var(--h3-native-widget-text,#ddd); font:12px sans-serif; cursor:pointer; white-space:nowrap; }
