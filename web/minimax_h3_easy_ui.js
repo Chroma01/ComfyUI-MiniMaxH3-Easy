@@ -5,6 +5,7 @@ const NODE_CLASS = "MiniMaxH3Easy";
 const IMAGE_CLASS = "MiniMaxH3EasyImage";
 const IMAGE_LOADER_CLASS = "MiniMaxH3EasyImageLoader";
 const IMAGE_OUTPUT_CLASS = "MiniMaxH3EasyImageOutput";
+const IMAGE_ADAPTER_CLASS = "MiniMaxH3EasyImageModelAdapter";
 const IMAGE_MAX_REFERENCES = 16;
 const CONTEXT_SEGMENTS_CLASS = "MiniMaxH3EasyContextSegments";
 const SELECTED_VIDEO_CONTEXT_CLASS = "MiniMaxH3EasySelectedVideoContext";
@@ -173,6 +174,7 @@ const TEXT = {
     selectedVideoContextTitle: ZH_BROWSER ? "MiniMax H3 Easy 已选视频上下文" : "MiniMax H3 Easy Selected Video Context",
     loaderTitle: ZH_BROWSER ? "MiniMax H3 Easy \u52a0\u8f7d\u5668" : "MiniMax H3 Easy Loader",
     adapterTitle: ZH_BROWSER ? "MiniMax H3 Easy \u6a21\u578b\u4e2d\u8f6c" : "MiniMax H3 Easy Model Bridge",
+    imageAdapterTitle: ZH_BROWSER ? "MiniMax H3 Easy \u56fe\u7247\u6a21\u578b\u4e2d\u8f6c" : "MiniMax H3 Easy Image Model Bridge",
     mediaBridgeTitle: ZH_BROWSER ? "MiniMax H3 Easy \u5a92\u4f53\u4e2d\u8f6c" : "MiniMax H3 Easy Media Bridge",
     mediaLoaderTitle: ZH_BROWSER ? "MiniMax H3 Easy \u5a92\u4f53\u52a0\u8f7d\u5668" : "MiniMax H3 Easy Media Loader",
     mediaSplitterTitle: ZH_BROWSER ? "MiniMax H3 Easy \u5a92\u4f53\u62c6\u5206" : "MiniMax H3 Easy Media Splitter",
@@ -560,6 +562,10 @@ function isImageOutput(node) {
     return nodeMatchesClass(node, IMAGE_OUTPUT_CLASS, "MiniMax H3 Easy Image Output", "__h3EasyImageOutputInstalled");
 }
 
+function isImageModelAdapter(node) {
+    return nodeMatchesClass(node, IMAGE_ADAPTER_CLASS, "MiniMax H3 Easy Image Model Adapter", "__h3EasyImageModelAdapterInstalled");
+}
+
 function isContextSegmentsNode(node) {
     return nodeMatchesClass(node, CONTEXT_SEGMENTS_CLASS, TEXT.contextSegmentsTitle, "__h3ContextSegmentsNodeInstalled");
 }
@@ -909,6 +915,17 @@ function localizeNodeInstance(node) {
         for (const output of node.outputs || []) setLocalizedSlotLabel(output, ZH_BROWSER ? "H3 \u56fe\u7247\u6a21\u578b\u7ec4\u5408" : "H3 image bundle");
         return;
     }
+    if (isImageModelAdapter(node)) {
+        node.title = TEXT.imageAdapterTitle;
+        const labels = {
+            image_model: ZH_BROWSER ? "\u56fe\u7247\u4e3b\u6a21\u578b" : "Image model",
+            text_encoder: TEXT.textEncoder,
+            image_vae: ZH_BROWSER ? "\u56fe\u7247 VAE" : "Image VAE",
+        };
+        for (const input of node.inputs || []) if (labels[input.name]) setLocalizedSlotLabel(input, labels[input.name]);
+        for (const output of node.outputs || []) setLocalizedSlotLabel(output, ZH_BROWSER ? "H3 \u56fe\u7247\u6a21\u578b\u7ec4\u5408" : "H3 image bundle");
+        return;
+    }
     if (isMediaSplitter(node)) {
         node.title = TEXT.mediaSplitterTitle;
         const countLabels = {
@@ -1164,9 +1181,11 @@ function localizeNodeDefinition(nodeData) {
         nodeData.category = TEXT.category;
         return;
     }
-    if (nodeData?.name === IMAGE_CLASS || nodeData?.name === IMAGE_LOADER_CLASS) {
+    if (nodeData?.name === IMAGE_CLASS || nodeData?.name === IMAGE_LOADER_CLASS || nodeData?.name === IMAGE_ADAPTER_CLASS) {
         nodeData.display_name = nodeData.name === IMAGE_CLASS
             ? (ZH_BROWSER ? "MiniMax H3 Easy \u56fe\u7247" : "MiniMax H3 Easy Image")
+            : nodeData.name === IMAGE_ADAPTER_CLASS
+            ? TEXT.imageAdapterTitle
             : (ZH_BROWSER ? "MiniMax H3 Easy \u56fe\u7247\u6a21\u578b\u52a0\u8f7d\u5668" : "MiniMax H3 Easy Image Loader");
         nodeData.category = TEXT.category;
         return;
@@ -7630,9 +7649,10 @@ function installLoaderNode(nodeType, nodeData) {
 }
 
 function installAdapterNode(nodeType, nodeData) {
-    if (nodeData?.name !== ADAPTER_CLASS) return;
-    if (nodeType.prototype.__h3EasyAdapterInstalled) return;
-    nodeType.prototype.__h3EasyAdapterInstalled = true;
+    if (![ADAPTER_CLASS, IMAGE_ADAPTER_CLASS].includes(nodeData?.name)) return;
+    const installedMarker = nodeData.name === IMAGE_ADAPTER_CLASS ? "__h3EasyImageModelAdapterInstalled" : "__h3EasyAdapterInstalled";
+    if (nodeType.prototype[installedMarker]) return;
+    nodeType.prototype[installedMarker] = true;
     const originalCreated = nodeType.prototype.onNodeCreated;
     nodeType.prototype.onNodeCreated = function onNodeCreatedH3Adapter() {
         const result = originalCreated?.apply(this, arguments);

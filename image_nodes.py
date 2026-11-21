@@ -330,6 +330,30 @@ class MiniMaxH3EasyImageLoader:
         return (MiniMaxH3ImageBundle(model, clip, vae),)
 
 
+class MiniMaxH3EasyImageModelAdapter:
+    CATEGORY = "MiniMax H3 Easy"
+    FUNCTION = "assemble"
+    RETURN_TYPES = (IMAGE_BUNDLE_TYPE,)
+    RETURN_NAMES = ("h3_image_bundle",)
+    DESCRIPTION = "Assemble standard ComfyUI MODEL, CLIP and VAE outputs into an H3 Image bundle, so LoRA loaders can feed MiniMax H3 Easy Image."
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {
+            "image_model": ("MODEL",),
+            "text_encoder": ("CLIP",),
+            "image_vae": ("VAE",),
+        }}
+
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        return float("nan")
+
+    @staticmethod
+    def assemble(image_model, text_encoder, image_vae):
+        return (MiniMaxH3ImageBundle(image_model, text_encoder, image_vae),)
+
+
 def _image_conditioning(bundle, prompt, images, width, height, reference_size):
     if reference_size == IMAGE_REF_AUTO:
         result = h3.MiniMaxH3ImageConditioning.execute(
