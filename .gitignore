@@ -8,3 +8,6 @@ Thumbs.db
 *.log
 prompt_optimizer.json
 tools/
+
+# Named media presets (personal, server-side data — never in git)
+presets/

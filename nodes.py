@@ -2325,6 +2325,120 @@ def _register_prompt_optimizer_route_when_ready() -> None:
     threading.Thread(target=wait_for_server, daemon=True, name="MiniMaxH3PromptOptimizerRoute").start()
 
 
+def _media_presets_dir() -> str:
+    return os.path.join(os.path.dirname(os.path.realpath(__file__)), "presets", "media")
+
+
+def _media_preset_path(name: str) -> str | None:
+    """Filesystem-safe preset leaf; unicode names are fine, path games are not."""
+    safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "-", str(name or "").strip()).strip(". ")[:80]
+    if not safe:
+        return None
+    return os.path.join(_media_presets_dir(), safe + ".json")
+
+
+def _media_loader_widget_state(state: dict[str, list[dict[str, str]]]) -> dict[str, list[dict[str, str]]]:
+    """Map the normalizer's singular keys to the widget's plural JSON shape."""
+    return {f"{kind}s": entries for kind, entries in state.items()}
+
+
+def _register_media_presets_route() -> bool:
+    try:
+        from aiohttp import web
+        from server import PromptServer
+    except Exception:
+        return False
+    routes = getattr(getattr(PromptServer, "instance", None), "routes", None)
+    if routes is None or getattr(_register_media_presets_route, "_registered", False):
+        return bool(getattr(_register_media_presets_route, "_registered", False))
+
+    @routes.get("/minimax_h3_easy/media_presets")
+    async def _media_presets_list(request):
+        names = []
+        directory = _media_presets_dir()
+        if os.path.isdir(directory):
+            for filename in os.listdir(directory):
+                if filename.endswith(".json"):
+                    names.append(filename[:-5])
+        names.sort(key=lambda preset: os.path.getmtime(
+            os.path.join(directory, preset + ".json")), reverse=True)
+        return web.json_response({"ok": True, "presets": names})
+
+    @routes.get("/minimax_h3_easy/media_presets/{name:.*}")
+    async def _media_presets_get(request):
+        path = _media_preset_path(request.match_info["name"])
+        if path is None or not os.path.isfile(path):
+            return web.json_response({"ok": False, "error": "preset not found"}, status=404)
+        try:
+            with open(path, encoding="utf-8") as handle:
+                state = _media_loader_normalize_state(json.load(handle))
+            # Answer in the widget's own plural JSON shape; the normalizer
+            # works in singular internal keys.
+            return web.json_response({"ok": True, "state": _media_loader_widget_state(state)})
+        except Exception as exc:
+            return web.json_response({"ok": False, "error": str(exc)}, status=500)
+
+    @routes.post("/minimax_h3_easy/media_presets/{name:.*}")
+    async def _media_presets_save(request):
+        path = _media_preset_path(request.match_info["name"])
+        if path is None:
+            return web.json_response({"ok": False, "error": "empty preset name"}, status=400)
+        try:
+            payload = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "invalid JSON body"}, status=400)
+        raw = payload.get("state") if isinstance(payload, Mapping) and "state" in payload else payload
+        # The node's own normalizer sanitizes paths and dedupes entries, so a
+        # preset can never smuggle in a path the loader itself would reject.
+        # Count limits are intentionally NOT applied here: the loader is an
+        # unrestricted media library and downstream nodes apply the budget.
+        state = _media_loader_normalize_state(raw)
+        if not any(entries for entries in state.values()):
+            return web.json_response({"ok": False, "error": "preset has no media"}, status=400)
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as handle:
+                # Store in the widget's own plural JSON shape so preset files
+                # are hand-editable and identical to media_state content.
+                json.dump(_media_loader_widget_state(state), handle,
+                          ensure_ascii=False, separators=(",", ":"))
+            return web.json_response({
+                "ok": True,
+                "counts": {kind: len(entries) for kind, entries in state.items()},
+            })
+        except Exception as exc:
+            return web.json_response({"ok": False, "error": str(exc)}, status=500)
+
+    @routes.delete("/minimax_h3_easy/media_presets/{name:.*}")
+    async def _media_presets_delete(request):
+        path = _media_preset_path(request.match_info["name"])
+        if path is None or not os.path.isfile(path):
+            return web.json_response({"ok": False, "error": "preset not found"}, status=404)
+        try:
+            os.remove(path)
+            return web.json_response({"ok": True})
+        except Exception as exc:
+            return web.json_response({"ok": False, "error": str(exc)}, status=500)
+
+    _register_media_presets_route._registered = True
+    return True
+
+
+def _register_media_presets_route_when_ready() -> None:
+    if _register_media_presets_route():
+        return
+
+    def wait_for_server() -> None:
+        # Same bounded retry as the optimizer routes: PromptServer appears
+        # shortly after custom-node import; do not block the import itself.
+        for _ in range(2400):
+            if _register_media_presets_route():
+                return
+            threading.Event().wait(0.05)
+
+    threading.Thread(target=wait_for_server, daemon=True, name="MiniMaxH3MediaPresetsRoute").start()
+
+
 def _role_choices(role: str, categories: tuple[str, ...], fallback: str) -> list[str]:
     names = _collect_weight_names(categories)
     selected = [name for name in names if _has_role(name, role)]
@@ -7836,6 +7950,7 @@ class MiniMaxH3EasySecondPassConditioning:
 
 
 _register_prompt_optimizer_route_when_ready()
+_register_media_presets_route_when_ready()
 
 
 NODE_CLASS_MAPPINGS = {

@@ -193,6 +193,14 @@ const TEXT = {
     mediaLoaderEmpty: ZH_BROWSER ? "\u6682\u65e0\u5a92\u4f53" : "No media",
     mediaLoaderLimit: ZH_BROWSER ? "\u5df2\u8fbe\u8be5\u5206\u533a\u4e0a\u9650" : "This section is full",
     mediaLoaderUnsupported: ZH_BROWSER ? "\u53ea\u652f\u6301\u56fe\u7247\u3001\u97f3\u9891\u6216\u89c6\u9891\u6587\u4ef6" : "Only image, audio, and video files are supported",
+    mediaLoaderPresetName: ZH_BROWSER ? "\u9884\u8bbe\u540d\u79f0" : "Preset name",
+    mediaLoaderPresetSave: ZH_BROWSER ? "\u4fdd\u5b58\u9884\u8bbe" : "Save preset",
+    mediaLoaderPresetSaved: ZH_BROWSER ? "\u5df2\u4fdd\u5b58" : "Saved",
+    mediaLoaderPresetOverwrite: ZH_BROWSER ? "\u8986\u76d6\uff1f" : "Overwrite?",
+    mediaLoaderPresetLoad: ZH_BROWSER ? "\u8f7d\u5165" : "Load",
+    mediaLoaderPresetDelete: ZH_BROWSER ? "\u5220\u9664" : "Delete",
+    mediaLoaderPresetMissing: ZH_BROWSER ? "\u6587\u4ef6\u7f3a\u5931" : "Files from the preset are missing",
+    mediaLoaderPresetFailed: ZH_BROWSER ? "\u9884\u8bbe\u64cd\u4f5c\u5931\u8d25" : "Preset action failed",
     outputTitle: ZH_BROWSER ? "MiniMax H3 Easy \u8f93\u51fa" : "MiniMax H3 Easy Output",
     samplerTitle: ZH_BROWSER ? "MiniMax H3 Easy \u91c7\u6837" : "MiniMax H3 Easy Sample",
     selfLiftTitle: "MiniMax H3 Easy SelfLift",
@@ -8131,6 +8139,151 @@ async function mediaLoaderUpload(node, input) {
     }
 }
 
+// --- Named media presets: personal server-side files under presets/media/ ---
+const MEDIA_PRESET_BASE = "/minimax_h3_easy/media_presets";
+
+async function mediaLoaderPresetFetch(path, options) {
+    const response = await fetch(MEDIA_PRESET_BASE + path, options);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data.ok === false) {
+        throw new Error(String(data?.error || ("HTTP " + response.status)));
+    }
+    return data;
+}
+
+function mediaLoaderPresetList() {
+    return mediaLoaderPresetFetch("").then((data) => data.presets || []).catch(() => []);
+}
+
+async function mediaLoaderPresetMissingCount(state) {
+    const files = [...state.images, ...state.audios, ...state.videos];
+    if (!files.length) return 0;
+    const checks = files.map((filename) => fetch("/view?filename=" + encodeURIComponent(filename) + "&type=input", { method: "HEAD" })
+        .then((response) => (response.ok ? 0 : 1))
+        .catch(() => 1));
+    return (await Promise.all(checks)).reduce((total, missing) => total + missing, 0);
+}
+
+function buildMediaLoaderPresetBar(node) {
+    const row = document.createElement("div");
+    row.className = "h3-media-loader-presets";
+    const nameInput = document.createElement("input");
+    nameInput.type = "text";
+    nameInput.placeholder = TEXT.mediaLoaderPresetName;
+    nameInput.spellcheck = false;
+    const select = document.createElement("select");
+    select.title = TEXT.mediaLoaderPresetLoad;
+    const saveBtn = document.createElement("button");
+    saveBtn.type = "button";
+    saveBtn.textContent = TEXT.mediaLoaderPresetSave;
+    const loadBtn = document.createElement("button");
+    loadBtn.type = "button";
+    loadBtn.textContent = TEXT.mediaLoaderPresetLoad;
+    const deleteBtn = document.createElement("button");
+    deleteBtn.type = "button";
+    deleteBtn.textContent = TEXT.mediaLoaderPresetDelete;
+    row.append(nameInput, select, saveBtn, loadBtn, deleteBtn);
+
+    let armedTitle = null;
+    let armTimer = 0;
+    const disarm = () => {
+        armedTitle = null;
+        saveBtn.textContent = TEXT.mediaLoaderPresetSave;
+    };
+    const flash = (label) => {
+        window.clearTimeout(armTimer);
+        saveBtn.textContent = label;
+        armTimer = window.setTimeout(disarm, 1500);
+    };
+
+    async function refresh() {
+        const names = await mediaLoaderPresetList();
+        const previous = select.value;
+        select.replaceChildren(...names.map((name) => {
+            const option = document.createElement("option");
+            option.value = name;
+            option.textContent = name;
+            return option;
+        }));
+        if (names.includes(previous)) select.value = previous;
+    }
+    refresh();
+
+    saveBtn.addEventListener("click", async () => {
+        const title = String(nameInput.value || select.value || "").trim();
+        if (!title) { nameInput.focus(); return; }
+        const state = mediaLoaderReadState(node);
+        if (!state.images.length && !state.audios.length && !state.videos.length) {
+            flash(TEXT.mediaLoaderEmpty);
+            return;
+        }
+        try {
+            if (armedTitle !== title && (await mediaLoaderPresetList()).includes(title)) {
+                // Second click arms the overwrite; label reverts after 3 s.
+                window.clearTimeout(armTimer);
+                armedTitle = title;
+                saveBtn.textContent = TEXT.mediaLoaderPresetOverwrite;
+                armTimer = window.setTimeout(disarm, 3050);
+                return;
+            }
+            disarm();
+            await mediaLoaderPresetFetch("/" + encodeURIComponent(title), {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ state }),
+            });
+            nameInput.value = title;
+            flash(TEXT.mediaLoaderPresetSaved);
+            await refresh();
+        } catch (error) {
+            globalThis.alert?.(TEXT.mediaLoaderPresetFailed + ": " + (error?.message || error));
+        }
+    });
+
+    loadBtn.addEventListener("click", async () => {
+        const title = select.value;
+        if (!title) return;
+        try {
+            const data = await mediaLoaderPresetFetch("/" + encodeURIComponent(title));
+            const toNames = (entries) => (Array.isArray(entries) ? entries : [])
+                .map((entry) => (entry && typeof entry === "object" ? entry.filename : entry))
+                .map((filename) => String(filename || "").trim())
+                .filter(Boolean);
+            const state = {
+                images: toNames(data?.state?.images),
+                audios: toNames(data?.state?.audios),
+                videos: toNames(data?.state?.videos),
+            };
+            mediaLoaderWriteState(node, state);
+            mediaLoaderRender(node);
+            node.setDirtyCanvas?.(true, true);
+            nameInput.value = title;
+            const missing = await mediaLoaderPresetMissingCount(state);
+            if (missing) {
+                const total = state.images.length + state.audios.length + state.videos.length;
+                globalThis.alert?.(TEXT.mediaLoaderPresetMissing + ": " + missing + "/" + total);
+            }
+        } catch (error) {
+            globalThis.alert?.(TEXT.mediaLoaderPresetFailed + ": " + (error?.message || error));
+        }
+    });
+
+    deleteBtn.addEventListener("click", async () => {
+        const title = select.value || String(nameInput.value || "").trim();
+        if (!title) return;
+        try {
+            await mediaLoaderPresetFetch("/" + encodeURIComponent(title), { method: "DELETE" });
+            if (nameInput.value.trim() === title) nameInput.value = "";
+            disarm();
+            await refresh();
+        } catch (error) {
+            globalThis.alert?.(TEXT.mediaLoaderPresetFailed + ": " + (error?.message || error));
+        }
+    });
+
+    return row;
+}
+
 function mediaLoaderDataTransferHasFiles(dataTransfer) {
     if (!dataTransfer) return false;
     if (Array.from(dataTransfer.types || []).some((type) => String(type).toLowerCase() === "files")) return true;
@@ -8578,6 +8731,11 @@ function installMediaLoaderStyles() {
       .h3-media-loader-panel.is-file-drop-target { border-color:#718ca6; box-shadow:inset 0 0 0 1px rgba(113,140,166,.34); }
       .h3-media-loader-panel.is-file-drop-target::after { content:attr(data-drop-label); position:absolute; inset:8px; z-index:20; display:flex; align-items:center; justify-content:center; box-sizing:border-box; border:1px dashed rgba(146,177,207,.62); border-radius:5px; background:rgba(25,28,32,.9); color:#d7e2ec; font-size:12px; font-weight:600; letter-spacing:.01em; pointer-events:none; }
       .h3-media-loader-toolbar { display:flex; align-items:center; justify-content:space-between; gap:8px; min-height:28px; padding-bottom:1px; }
+      .h3-media-loader-presets { display:flex; align-items:center; gap:6px; min-height:24px; }
+      .h3-media-loader-presets input { flex:1.2 1 110px; min-width:0; padding:4px 6px; border:1px solid #111; border-radius:4px; background:#1a1a1a; color:var(--h3-native-widget-text,#ddd); font:12px sans-serif; }
+      .h3-media-loader-presets select { flex:1 1 90px; min-width:0; padding:4px; border:1px solid #111; border-radius:4px; background:#1a1a1a; color:var(--h3-native-widget-text,#ddd); font:12px sans-serif; }
+      .h3-media-loader-presets button { padding:4px 8px; border:1px solid #111; border-radius:4px; background:#333; color:var(--h3-native-widget-text,#ddd); font:12px sans-serif; cursor:pointer; white-space:nowrap; }
+      .h3-media-loader-presets button:hover { background:#3a3a3a; }
       .h3-media-loader-heading { display:flex; align-items:baseline; gap:7px; min-width:0; }
       .h3-media-loader-title { font-weight:650; color:#eee; }
       .h3-media-loader-count { color:#888; font-size:10px; font-variant-numeric:tabular-nums; }
@@ -8686,7 +8844,7 @@ function installMediaLoaderNode(nodeType, nodeData) {
         toolbar.append(heading, upload);
         const groups = document.createElement("div");
         groups.className = "h3-media-loader-groups";
-        panel.append(toolbar, groups);
+        panel.append(toolbar, buildMediaLoaderPresetBar(node), groups);
         node.__h3MediaLoaderCount = count;
         for (const group of MEDIA_LOADER_GROUPS) {
             const section = document.createElement("section");
