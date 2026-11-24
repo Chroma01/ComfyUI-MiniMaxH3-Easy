@@ -201,6 +201,7 @@ const TEXT = {
     mediaLoaderPresetOverwrite: ZH_BROWSER ? "\u8986\u76d6\uff1f" : "Overwrite?",
     mediaLoaderPresetLoad: ZH_BROWSER ? "\u8f7d\u5165" : "Load",
     mediaLoaderPresetDelete: ZH_BROWSER ? "\u5220\u9664" : "Delete",
+    mediaLoaderPresetDeleteArm: ZH_BROWSER ? "\u5220\u9664\uff1f" : "Delete?",
     mediaLoaderPresetMissing: ZH_BROWSER ? "\u6587\u4ef6\u7f3a\u5931" : "Files from the preset are missing",
     mediaLoaderPresetFailed: ZH_BROWSER ? "\u9884\u8bbe\u64cd\u4f5c\u5931\u8d25" : "Preset action failed",
     mediaLoaderPresetRename: ZH_BROWSER ? "\u91cd\u547d\u540d" : "Rename",
@@ -8326,9 +8327,26 @@ function buildMediaLoaderPresetBar(node) {
         }
     });
 
+    // Two-step delete confirm (same arm pattern as the overwrite above):
+    // first click arms the button, second click within 3 s deletes.
+    let delArmedTitle = null;
+    let delArmTimer = 0;
+    const disarmDelete = () => {
+        delArmedTitle = null;
+        deleteBtn.textContent = TEXT.mediaLoaderPresetDelete;
+    };
     deleteBtn.addEventListener("click", async () => {
         const title = select.value || String(nameInput.value || "").trim();
         if (!title) return;
+        if (delArmedTitle !== title) {
+            window.clearTimeout(delArmTimer);
+            delArmedTitle = title;
+            deleteBtn.textContent = TEXT.mediaLoaderPresetDeleteArm;
+            delArmTimer = window.setTimeout(disarmDelete, 3050);
+            return;
+        }
+        window.clearTimeout(delArmTimer);
+        disarmDelete();
         try {
             await mediaLoaderPresetFetch("/" + encodeURIComponent(title), { method: "DELETE" });
             if (nameInput.value.trim() === title) nameInput.value = "";
